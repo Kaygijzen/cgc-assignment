@@ -3,4 +3,4 @@
 #SBATCH -N 4
 #SBATCH --ntasks-per-node=1
 
-mpirun -np 4 hello_world
+mpirun -np 4 bin/hello_world
