@@ -55,6 +55,7 @@ std::vector<float> calculate_cluster_average(
         std::vector<double>(num_row_labels * num_col_labels, 0.0);
     auto cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
     
+    // Reduce the local sums and sizes both with the SUM operator 
     for (int i = 0; i < rank_cluster_sum.size(); i++) {
         // Reduce all of the local sums into cluster_sum
         float local_sum = rank_cluster_sum.at(i);
@@ -214,20 +215,26 @@ std::pair<int, double> cluster_serial_iteration(
         row_labels,
         col_labels);
 
-    for (int i = 0; i < cluster_avg.size(); i++) {
-        std::cout << "cluster_avg = " << cluster_avg.at(i) << "\n";
-    }
+    int n = num_rows / size;
+    auto scatter_row_labels = std::vector<label_type>(n, 0);
+    
+    MPI_Scatter(row_labels, n, MPI_INT, scatter_row_labels.data(), n, MPI_INT, 0, MPI_COMM_WORLD);
 
     // Update labels along the rows
     auto [num_rows_updated, _] = update_row_labels(
-        num_rows,
+        n,
         num_cols,
         num_row_labels,
         num_col_labels,
         matrix,
-        row_labels,
+        scatter_row_labels.data(),// scatter_row_labels.data(),
         col_labels,
-        cluster_avg.data());
+        cluster_avg.data(),
+        rank);
+
+    MPI_Gather(scatter_row_labels.data(), n, MPI_INT, row_labels, n, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Allreduce(&num_rows_updated, &num_rows_updated, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
 
     // Update the labels along the columns
     auto [num_cols_updated, total_dist] = update_col_labels(
