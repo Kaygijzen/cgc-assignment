@@ -287,7 +287,7 @@ int main(int argc, const char* argv[]) {
         matrix.data(),
         row_labels.data(),
         col_labels.data(),
-        1);
+        max_iter);
 
     // Write resulting labels
     write_labels(
