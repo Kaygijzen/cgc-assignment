@@ -18,21 +18,59 @@ std::vector<float> calculate_cluster_average(
     const float* matrix,
     const label_type* row_labels,
     const label_type* col_labels) {
-    auto cluster_sum =
-        std::vector<double>(num_row_labels * num_col_labels, 0.0);
-    auto cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
 
-    for (int i = 0; i < num_rows; i++) {
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    int count = num_rows / size;
+    int r = num_rows % size;
+    int start, stop;
+    if (rank < r) {
+        // The first r ranks get count + 1 tasks
+        start = rank * (count + 1);
+        stop = start + count;
+    } else {
+        // The remaining size - r ranks get count task
+        start = rank * count + r;
+        stop = start + (count - 1);
+    }
+
+    auto rank_cluster_sum =
+        std::vector<double>(num_row_labels * num_col_labels, 0.0);
+    auto rank_cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
+
+    for (int i = start; i <= stop; i++) {
         for (int j = 0; j < num_cols; j++) {
             auto item = matrix[i * num_cols + j];
             auto row_label = row_labels[i];
             auto col_label = col_labels[j];
 
-            cluster_sum[row_label * num_col_labels + col_label] += item;
-            cluster_size[row_label * num_col_labels + col_label] += 1;
+            rank_cluster_sum[row_label * num_col_labels + col_label] += item;
+            rank_cluster_size[row_label * num_col_labels + col_label] += 1;
         }
     }
 
+    auto cluster_sum =
+        std::vector<double>(num_row_labels * num_col_labels, 0.0);
+    auto cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
+    
+    for (int i = 0; i < rank_cluster_sum.size(); i++) {
+        // Reduce all of the local sums into cluster_sum
+        float local_sum = rank_cluster_sum.at(i);
+        float global_sum;
+        MPI_Allreduce(&local_sum, &global_sum, 1, MPI_FLOAT, MPI_SUM,
+                MPI_COMM_WORLD);
+        cluster_sum[i] = global_sum;
+
+        // Reduce all of the local sizes into cluster_size
+        float local_size = rank_cluster_size.at(i);
+        float global_size;
+        MPI_Allreduce(&local_size, &global_size, 1, MPI_FLOAT, MPI_SUM,
+                MPI_COMM_WORLD);
+        cluster_size[i] = global_size;
+    }
+    
     auto cluster_avg = std::vector<float>(num_row_labels * num_col_labels);
 
     for (int i = 0; i < num_row_labels; i++) {
@@ -252,6 +290,8 @@ void cluster_serial(
 }
 
 int main(int argc, const char* argv[]) {
+    MPI_Init(NULL, NULL);
+
     std::string output_file;
     std::vector<float> matrix;
     std::vector<label_type> row_labels, col_labels;
