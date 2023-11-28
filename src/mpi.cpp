@@ -103,11 +103,15 @@ std::pair<int, double> update_row_labels(
     const float* matrix,
     label_type* row_labels,
     const label_type* col_labels,
-    const float* cluster_avg) {
+    const float* cluster_avg,
+    int rank) {
     int num_updated = 0;
     double total_dist = 0;
 
     for (int i = 0; i < num_rows; i++) {
+        // We need to 'offset' the row_idx by 'rank * num_rows'
+        int matrix_row_idx = i + (rank * num_rows);
+
         int best_label = -1;
         double best_dist = INFINITY;
 
@@ -115,7 +119,8 @@ std::pair<int, double> update_row_labels(
             double dist = 0;
 
             for (int j = 0; j < num_cols; j++) {
-                float item = matrix[i * num_cols + j];
+                //NOTE: new offset matrx_row_idx
+                float item = matrix[matrix_row_idx * num_cols + j];
 
                 int row_label = k;
                 int col_label = col_labels[j];
