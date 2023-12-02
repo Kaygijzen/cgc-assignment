@@ -2,6 +2,27 @@
 #include <iostream>
 
 #include "common.h"
+#include <mpi.h>
+
+std::pair<std::vector<int>, std::vector<int>> calculate_scatter(int n, int size) {
+    int count = n / size;
+    int remainder = n % size;
+    auto counts = std::vector<int>(size, count);
+    auto displacements = std::vector<int>(size, 0);
+
+    for (int i = 0; i < size; i++) {
+        if (i < remainder) {
+            // The first 'remainder' ranks get 'count + 1' tasks each
+            counts[i] += 1;
+            displacements[i] = i * (count + 1);
+        } else {
+            // The remaining 'size - remainder' ranks get 'count' task each
+            displacements[i] = i * count + remainder;
+        }
+    }
+
+    return std::make_pair(counts, displacements);
+}
 
 /**
  * This function returns a matrix of size (num_row_labels, num_col_labels)
@@ -63,19 +84,21 @@ std::pair<int, double> update_row_labels(
     const float* matrix,
     label_type* row_labels,
     const label_type* col_labels,
-    const float* cluster_avg) {
+    const float* cluster_avg,
+    int displacement) {
     int num_updated = 0;
     double total_dist = 0;
 
     for (int i = 0; i < num_rows; i++) {
         int best_label = -1;
         double best_dist = INFINITY;
+        int displaced_i = i + displacement;
 
         for (int k = 0; k < num_row_labels; k++) {
             double dist = 0;
 
             for (int j = 0; j < num_cols; j++) {
-                float item = matrix[i * num_cols + j];
+                float item = matrix[displaced_i * num_cols + j];
 
                 int row_label = k;
                 int col_label = col_labels[j];
@@ -113,19 +136,23 @@ std::pair<int, double> update_col_labels(
     const float* matrix,
     const label_type* row_labels,
     label_type* col_labels,
-    const float* cluster_avg) {
+    const float* cluster_avg,
+    int displacement,
+    int num_cols_recv) {
     int num_updated = 0;
     double total_dist = 0;
 
-    for (int j = 0; j < num_cols; j++) {
+    for (int j = 0; j < num_cols_recv; j++) {
         int best_label = -1;
         double best_dist = INFINITY;
+
+        int displaced_j = j + displacement;
 
         for (int k = 0; k < num_col_labels; k++) {
             double dist = 0;
 
             for (int i = 0; i < num_rows; i++) {
-                auto item = matrix[i * num_cols + j];
+                auto item = matrix[i * num_cols + displaced_j];
 
                 auto row_label = row_labels[i];
                 auto col_label = k;
@@ -164,7 +191,13 @@ std::pair<int, double> cluster_serial_iteration(
     int num_col_labels,
     const float* matrix,
     label_type* row_labels,
-    label_type* col_labels) {
+    label_type* col_labels,
+    int rank,
+    const int* row_counts,
+    const int* row_displacements,
+    const int* col_counts,
+    const int* col_displacements) {
+    //// SECTION: calculate_cluster_average
     // Calculate the average value per cluster
     auto cluster_avg = calculate_cluster_average(
         num_rows,
@@ -175,16 +208,60 @@ std::pair<int, double> cluster_serial_iteration(
         row_labels,
         col_labels);
 
+    //// SECTION: update_row_labels
+    int num_rows_recv = row_counts[rank];
+    auto scatter_row_labels = std::vector<label_type>(num_rows_recv, 0);
+    MPI_Scatterv(row_labels,
+                row_counts,
+                row_displacements,
+                MPI_INT,
+                scatter_row_labels.data(),
+                num_rows_recv,
+                MPI_INT,
+                0,
+                MPI_COMM_WORLD);
+    
+    int row_displacement = row_displacements[rank];
+
     // Update labels along the rows
     auto [num_rows_updated, _] = update_row_labels(
-        num_rows,
+        num_rows_recv,
         num_cols,
         num_row_labels,
         num_col_labels,
         matrix,
-        row_labels,
+        scatter_row_labels.data(),
         col_labels,
-        cluster_avg.data());
+        cluster_avg.data(),
+        row_displacement);
+
+    // Synchronize row_labels and num_rows_updated
+    MPI_Allgatherv(scatter_row_labels.data(),
+                   num_rows_recv,
+                   MPI_INT,
+                   row_labels,
+                   row_counts,
+                   row_displacements,
+                   MPI_INT,
+                   MPI_COMM_WORLD);
+    MPI_Allreduce(&num_rows_updated, &num_rows_updated, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    //// SECTION: update_col_labels
+    int num_cols_recv = col_counts[rank];
+    auto scatter_col_labels = std::vector<label_type>(num_cols_recv, 0);
+    MPI_Scatterv(col_labels,
+                col_counts,
+                col_displacements,
+                MPI_INT,
+                scatter_col_labels.data(),
+                num_cols_recv,
+                MPI_INT,
+                0,
+                MPI_COMM_WORLD);
+
+    int col_displacement = col_displacements[rank];
 
     // Update the labels along the columns
     auto [num_cols_updated, total_dist] = update_col_labels(
@@ -193,8 +270,23 @@ std::pair<int, double> cluster_serial_iteration(
         num_col_labels,
         matrix,
         row_labels,
-        col_labels,
-        cluster_avg.data());
+        scatter_col_labels.data(),
+        cluster_avg.data(),
+        col_displacement,
+        num_cols_recv);
+
+    // Synchronize col_labels, num_cols_updated and total_dist
+    MPI_Allgatherv(scatter_col_labels.data(),
+                   num_cols_recv,
+                   MPI_INT,
+                   col_labels,
+                   col_counts,
+                   col_displacements,
+                   MPI_INT,
+                   MPI_COMM_WORLD);
+
+    MPI_Allreduce(&num_cols_updated, &num_cols_updated, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&total_dist, &total_dist, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
     return {num_rows_updated + num_cols_updated, total_dist};
 }
@@ -216,6 +308,20 @@ void cluster_serial(
     int iteration = 0;
     auto before = std::chrono::high_resolution_clock::now();
 
+    int size, rank;
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    // Calculate values to scatter the row_labels and col_labels on using our helper function.
+    std::vector<int> row_counts, row_displacements, col_counts, col_displacements;
+    auto row_scatter = calculate_scatter(num_rows, size);
+    row_counts = row_scatter.first;
+    row_displacements = row_scatter.second;
+
+    auto col_scatter = calculate_scatter(num_cols, size);
+    col_counts = col_scatter.first;
+    col_displacements = col_scatter.second;
+
     while (iteration < max_iterations) {
         auto [num_updated, total_dist] = cluster_serial_iteration(
             num_rows,
@@ -224,14 +330,21 @@ void cluster_serial(
             num_col_labels,
             matrix,
             row_labels,
-            col_labels);
+            col_labels,
+            rank,
+            row_counts.data(),
+            row_displacements.data(),
+            col_counts.data(),
+            col_displacements.data());
 
         iteration++;
 
-        auto average_dist = total_dist / (num_rows * num_cols);
-        std::cout << "iteration " << iteration << ": " << num_updated
-                  << " labels were updated, average error is " << average_dist
-                  << "\n";
+        if (rank == 0) {
+            auto average_dist = total_dist / (num_rows * num_cols);
+            std::cout << "iteration " << iteration << ": " << num_updated
+                    << " labels were updated, average error is " << average_dist
+                    << "\n";
+        }
 
         if (num_updated == 0) {
             break;
@@ -240,13 +353,16 @@ void cluster_serial(
 
     auto after = std::chrono::high_resolution_clock::now();
     auto time_seconds = std::chrono::duration<double>(after - before).count();
-
-    std::cout << "clustering time total: " << time_seconds << " seconds\n";
-    std::cout << "clustering time per iteration: " << (time_seconds / iteration)
-              << " seconds\n";
+    if (rank == 0) {
+        std::cout << "clustering time total: " << time_seconds << " seconds\n";
+        std::cout << "clustering time per iteration: " << (time_seconds / iteration)
+                << " seconds\n";
+    }
 }
 
 int main(int argc, const char* argv[]) {
+    MPI_Init(NULL, NULL);
+
     std::string output_file;
     std::vector<float> matrix;
     std::vector<label_type> row_labels, col_labels;
@@ -283,18 +399,23 @@ int main(int argc, const char* argv[]) {
         col_labels.data(),
         max_iter);
 
-    // Write resulting labels
-    write_labels(
+    int rank; 
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    
+    if (rank == 0) {
+        // Write resulting labels
+        write_labels(
         output_file,
         num_rows,
         num_cols,
         row_labels.data(),
         col_labels.data());
 
-    auto after = std::chrono::high_resolution_clock::now();
-    auto time_seconds = std::chrono::duration<double>(after - before).count();
+        auto after = std::chrono::high_resolution_clock::now();
+        auto time_seconds = std::chrono::duration<double>(after - before).count();
 
-    std::cout << "total execution time: " << time_seconds << " seconds\n";
+        std::cout << "total execution time: " << time_seconds << " seconds\n";
+    }
 
     return EXIT_SUCCESS;
 }
