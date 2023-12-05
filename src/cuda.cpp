@@ -1,8 +1,9 @@
 #include <chrono>
 #include <iostream>
+#include <mpi.h>
 
 #include "common.h"
-#include <mpi.h>
+#include "cuda/module.h"
 
 std::pair<std::vector<int>, std::vector<int>> calculate_scatter(int n, int size) {
     int count = n / size;
@@ -38,6 +39,7 @@ std::vector<float> calculate_cluster_average(
     const float* matrix,
     const label_type* row_labels,
     const label_type* col_labels) {
+        //TODO: CUDA
     auto cluster_sum =
         std::vector<double>(num_row_labels * num_col_labels, 0.0);
     auto cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
@@ -86,6 +88,7 @@ std::pair<int, double> update_row_labels(
     const label_type* col_labels,
     const float* cluster_avg,
     int displacement) {
+        //TODO: CUDA
     int num_updated = 0;
     double total_dist = 0;
 
@@ -139,6 +142,7 @@ std::pair<int, double> update_col_labels(
     const float* cluster_avg,
     int displacement,
     int num_cols_recv) {
+        //TODO: CUDA
     int num_updated = 0;
     double total_dist = 0;
 
@@ -362,6 +366,9 @@ void cluster_serial(
 
 int main(int argc, const char* argv[]) {
     MPI_Init(NULL, NULL);
+
+    int a = 0;
+    call_kernel(a);
 
     std::string output_file;
     std::vector<float> matrix;

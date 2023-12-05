@@ -16,11 +16,12 @@ bin/cgc_serial: $(SRC)/serial.cpp $(SRC)/common.h
 bin/cgc_mpi: $(SRC)/mpi.cpp $(SRC)/common.h
 	$(MPICC) -o $@ $(SRC)/mpi.cpp $(CFLAGS) $(INCLUDES)
 
-bin/cgc_cuda: $(SRC)/cuda.cpp $(SRC)/common.h
-	$(MPICC) -o $@ $(SRC)/cuda.cpp $(CFLAGS) $(INCLUDES)
 
-bin/hello_world: $(SRC)/hello_world.cpp
-	$(MPICC) -o $@ $(SRC)/hello_world.cpp $(CFLAGS)
+bin/cgc_cuda: bin/module.o
+	$(MPICC) bin/module.o $(SRC)/cuda.cpp -o $@ $(CFLAGS) $(INCLUDES) -lcudart -lcurand
+
+bin/module.o: $(SRC)/cuda/module.cu $(SRC)/cuda/module.h 
+	nvcc -c -g $(SRC)/cuda/module.cu -o $@ -I -dlink
 
 clean:
 	rm -rf $(BINS)
