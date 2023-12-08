@@ -38,24 +38,47 @@ std::vector<float> calculate_cluster_average(
     int num_col_labels,
     const float* matrix,
     const label_type* row_labels,
-    const label_type* col_labels) {
-        //TODO: CUDA
-    auto cluster_sum =
-        std::vector<double>(num_row_labels * num_col_labels, 0.0);
-    auto cluster_size = std::vector<int>(num_row_labels * num_col_labels, 0);
+    const label_type* col_labels,
+    int row_displacement) {
 
-    for (int i = 0; i < num_rows; i++) {
+    int num_clusters = num_row_labels * num_col_labels;
+    auto local_cluster_sum =
+        std::vector<double>(num_clusters, 0.0);
+    auto local_cluster_size = std::vector<int>(num_clusters, 0);
+
+    for (int i = row_displacement; i < num_rows + row_displacement; i++) {
         for (int j = 0; j < num_cols; j++) {
             auto item = matrix[i * num_cols + j];
             auto row_label = row_labels[i];
             auto col_label = col_labels[j];
 
-            cluster_sum[row_label * num_col_labels + col_label] += item;
-            cluster_size[row_label * num_col_labels + col_label] += 1;
+            local_cluster_sum[row_label * num_col_labels + col_label] += item;
+            local_cluster_size[row_label * num_col_labels + col_label] += 1;
         }
     }
 
-    auto cluster_avg = std::vector<float>(num_row_labels * num_col_labels);
+    auto cluster_sum =
+        std::vector<double>(num_clusters, 0.0);
+    auto cluster_size = std::vector<int>(num_clusters, 0);
+
+    for (int i = 0; i < cluster_sum.size(); i++) {
+        MPI_Allreduce(
+            local_cluster_sum.data(),
+            cluster_sum.data(),
+            cluster_sum.size(),
+            MPI_DOUBLE,
+            MPI_SUM,
+            MPI_COMM_WORLD);
+        MPI_Allreduce(
+            local_cluster_size.data(),
+            cluster_size.data(),
+            cluster_size.size(),
+            MPI_INT,
+            MPI_SUM,
+            MPI_COMM_WORLD);
+    }
+
+    auto cluster_avg = std::vector<float>(num_clusters);
 
     for (int i = 0; i < num_row_labels; i++) {
         for (int j = 0; j < num_col_labels; j++) {
@@ -92,37 +115,16 @@ std::pair<int, double> update_row_labels(
     int num_updated = 0;
     double total_dist = 0;
 
-    for (int i = 0; i < num_rows; i++) {
-        int best_label = -1;
-        double best_dist = INFINITY;
-        int displaced_i = i + displacement;
-
-        for (int k = 0; k < num_row_labels; k++) {
-            double dist = 0;
-
-            for (int j = 0; j < num_cols; j++) {
-                float item = matrix[displaced_i * num_cols + j];
-
-                int row_label = k;
-                int col_label = col_labels[j];
-                float y = cluster_avg[row_label * num_col_labels + col_label];
-
-                dist += calculate_distance(y, item);
-            }
-
-            if (dist < best_dist) {
-                best_dist = dist;
-                best_label = k;
-            }
-        }
-
-        if (row_labels[i] != best_label) {
-            row_labels[i] = best_label;
-            num_updated++;
-        }
-
-        total_dist += best_dist;
-    }
+    call_update_row_labels(
+        num_rows,
+        num_cols,
+        num_row_labels,
+        num_col_labels,
+        matrix,
+        row_labels,
+        col_labels,
+        cluster_avg,
+        displacement);
 
     return {num_updated, total_dist};
 }
@@ -201,19 +203,23 @@ std::pair<int, double> cluster_serial_iteration(
     const int* row_displacements,
     const int* col_counts,
     const int* col_displacements) {
+
+    int num_rows_recv = row_counts[rank];
+    int row_displacement = row_displacements[rank];
+
     //// SECTION: calculate_cluster_average
     // Calculate the average value per cluster
     auto cluster_avg = calculate_cluster_average(
-        num_rows,
+        num_rows_recv,
         num_cols,
         num_row_labels,
         num_col_labels,
         matrix,
         row_labels,
-        col_labels);
+        col_labels,
+        row_displacement);
 
     //// SECTION: update_row_labels
-    int num_rows_recv = row_counts[rank];
     auto scatter_row_labels = std::vector<label_type>(num_rows_recv, 0);
     MPI_Scatterv(row_labels,
                 row_counts,
@@ -224,8 +230,6 @@ std::pair<int, double> cluster_serial_iteration(
                 MPI_INT,
                 0,
                 MPI_COMM_WORLD);
-    
-    int row_displacement = row_displacements[rank];
 
     // Update labels along the rows
     auto [num_rows_updated, _] = update_row_labels(
@@ -366,9 +370,6 @@ void cluster_serial(
 
 int main(int argc, const char* argv[]) {
     MPI_Init(NULL, NULL);
-
-    int a = 0;
-    call_kernel(a);
 
     std::string output_file;
     std::vector<float> matrix;
