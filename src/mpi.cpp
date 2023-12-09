@@ -272,8 +272,6 @@ std::pair<int, double> cluster_serial_iteration(
                    MPI_COMM_WORLD);
     MPI_Allreduce(&num_rows_updated, &num_rows_updated, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 
-    MPI_Barrier(MPI_COMM_WORLD);
-
     //// SECTION: update_col_labels
     int num_cols_recv = col_counts[rank];
     auto scatter_col_labels = std::vector<label_type>(num_cols_recv, 0);
