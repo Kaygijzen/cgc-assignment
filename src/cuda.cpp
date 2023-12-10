@@ -116,7 +116,7 @@ std::pair<int, double> update_row_labels(
 
     for (int i = 0; i < num_rows; i++) {
 
-        auto [best_label, best_dist] = best_label_row(
+        auto [best_label, best_dist] = best_row_label(
             num_row_labels,
             num_col_labels,
             num_rows,

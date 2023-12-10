@@ -51,7 +51,7 @@ __global__ void block_dist_row_labels(
 	}
 }
 
-std::pair<int, double> best_label_row(
+std::pair<int, double> best_row_label(
 	int num_row_labels,
 	int num_col_labels,
 	int num_rows,

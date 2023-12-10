@@ -11,7 +11,7 @@
 #include <numeric>
 #include <cuda.h>
 
-std::pair<int, double> best_label_row(
+std::pair<int, double> best_row_label(
 	int num_row_labels,
 	int num_col_labels,
 	int num_rows,
