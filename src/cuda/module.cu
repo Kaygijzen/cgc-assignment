@@ -12,6 +12,156 @@
 __device__ int d_num_col_labels_updated = 0;
 __device__ double d_total_dist_cols = 0;
 
+// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
+__global__ void cluster_id_kernel(
+	int num_rows,
+	int num_cols,
+	const int* row_labels,
+	const int* col_labels,
+	int row_displacement,
+	int* cluster_ids
+) {
+	int j = blockDim.x * blockIdx.x + threadIdx.x; 
+	int tid = threadIdx.x;
+
+	if (j < num_cols) {
+		for (int i = row_displacement; i < num_rows + row_displacement; i++) {
+			cluster_ids[i * num_cols + j] = row_labels[i] * col_labels[j];
+		}
+	}
+}
+
+// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
+void call_cluster_id_kernel(
+	int num_rows,
+	int num_cols,
+	int num_row_labels,
+	int num_col_labels,
+	const float* matrix,
+	const int* row_labels,
+	const int* col_labels,
+	int row_displacement,
+	int* cluster_ids) {
+
+	int N = num_cols;
+
+	// Block size and number calculation
+	int blockSize = 1024;
+  int numBlocks = (N + blockSize - 1) / blockSize;
+
+	// Allocate memory for data on device
+	float *d_matrix;
+	cudaMalloc(&d_matrix, (num_cols*num_rows)*sizeof(float));
+	int *d_cluster_ids;
+	cudaMalloc(&d_cluster_ids, (num_cols*num_rows)*sizeof(int));
+	int *d_col_labels;
+	cudaMalloc(&d_col_labels, num_cols*sizeof(int));
+	int *d_row_labels;
+	cudaMalloc(&d_row_labels, num_rows*sizeof(int));
+
+	// Copy data to device
+	cudaMemcpy(d_row_labels, row_labels, (num_rows)*sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_col_labels, col_labels, (num_cols)*sizeof(int), cudaMemcpyHostToDevice);
+
+	cluster_id_kernel <<< numBlocks, blockSize >>>(
+		num_rows,
+		num_cols,
+		d_row_labels,
+		d_col_labels,
+		row_displacement,
+		d_cluster_ids);
+
+	// Copy result from device to host
+	cudaMemcpy(cluster_ids, d_cluster_ids, (num_cols*num_rows)*sizeof(int), cudaMemcpyDeviceToHost);
+	
+	// Free allocated memory
+	cudaFree(d_cluster_ids);
+	cudaFree(d_col_labels);
+	cudaFree(d_row_labels);
+}
+
+// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
+__global__ void cluster_sum_size_kernel(
+	int num_rows,
+	int num_cols,
+	const float* matrix,
+	const int* cluster_ids,
+	double* cluster_sum,
+	int* cluster_size,
+	int row_displacement,
+	int N
+) {
+	int id = blockDim.x * blockIdx.x + threadIdx.x; 
+	int tid = threadIdx.x;
+
+	if (id < (N)) {
+		for (int i = row_displacement; i < num_rows + row_displacement; i++) {
+			for (int j = 0; j < num_cols; j++) {
+				int cluster_id = cluster_ids[i * num_cols + j];
+				if (id == cluster_id) {
+					cluster_sum[cluster_id] += matrix[cluster_ids[i * num_cols + j]];
+					cluster_size[cluster_id] += 1;
+				}
+			}
+		}
+	}
+};
+
+// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
+void call_cluster_sum_size_kernel(
+	int num_rows,
+	int num_cols,
+	int num_row_labels,
+	int num_col_labels,
+	const float* matrix,
+	int* cluster_ids,
+	int row_displacement,
+	double* cluster_sum,
+	int* cluster_size) {
+
+	int N = num_col_labels * num_row_labels;
+
+	// Block size and number calculation
+	int blockSize = 1024;
+  int numBlocks = (N + blockSize - 1) / blockSize;
+
+	// Allocate memory for data on device
+	float *d_matrix;
+	cudaMalloc(&d_matrix, (num_cols*num_rows)*sizeof(float));
+	int *d_cluster_ids;
+	cudaMalloc(&d_cluster_ids, (num_cols*num_rows)*sizeof(int));
+	double *d_cluster_sum;
+	cudaMalloc(&d_cluster_sum, (num_row_labels*num_col_labels)*sizeof(double));
+	int *d_cluster_size;
+	cudaMalloc(&d_cluster_size, (num_row_labels*num_col_labels)*sizeof(int));
+
+	// Copy data to device
+	cudaMemcpy(d_matrix, matrix, (num_cols*num_rows)*sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_cluster_ids, cluster_ids, (num_cols*num_rows)*sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_cluster_sum, cluster_sum, (num_col_labels*num_row_labels)*sizeof(double), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_cluster_size, cluster_size, (num_col_labels*num_row_labels)*sizeof(int), cudaMemcpyHostToDevice);
+	
+	cluster_sum_size_kernel <<< numBlocks, blockSize >>>(
+		num_rows,
+		num_cols,
+		d_matrix,
+		d_cluster_ids,
+		d_cluster_sum,
+		d_cluster_size,
+		row_displacement,
+		(num_row_labels * num_col_labels));
+
+	// Copy results from device to host
+	cudaMemcpy(cluster_sum, d_cluster_sum, (num_row_labels*num_col_labels)*sizeof(double), cudaMemcpyDeviceToHost);
+	cudaMemcpy(cluster_size, d_cluster_size, (num_row_labels*num_col_labels)*sizeof(int), cudaMemcpyDeviceToHost);
+
+	// Free allocated memory
+	cudaFree(d_matrix);
+	cudaFree(d_cluster_ids);
+	cudaFree(d_cluster_sum);
+	cudaFree(d_cluster_size);
+}
+
 __global__ void block_dist_row_labels(
 	const float* matrix, 
 	int i,
@@ -141,8 +291,7 @@ __global__ void col_labels_iteration(
 	int num_cols,
 	int num_rows,
 	int num_col_labels,
-	int displacement) 
-{
+	int displacement) {
 	int j = blockDim.x * blockIdx.x + threadIdx.x; 
 	int displaced_j = j + displacement;
 

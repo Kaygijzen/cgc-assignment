@@ -46,6 +46,33 @@ std::vector<float> calculate_cluster_average(
         std::vector<double>(num_clusters, 0.0);
     auto local_cluster_size = std::vector<int>(num_clusters, 0);
 
+    // THE FOLLOWING IS TENTANTIVE AND NOT IMPLEMENTED
+	// // Allocate memory on host
+	// int *cluster_ids = (int*)malloc((num_cols*num_rows)*sizeof(int));
+
+    // call_cluster_id_kernel(
+    //     num_rows,
+    //     num_cols,
+    //     num_row_labels,
+    //     num_col_labels,
+    //     matrix,
+    //     row_labels,
+    //     col_labels,
+    //     row_displacement,
+    //     cluster_ids);
+
+    // call_cluster_sum_size_kernel(
+    //     num_rows,
+    //     num_cols,
+	//     num_row_labels,
+	//     num_col_labels,
+    //     matrix,
+    //     cluster_ids,
+    //     row_displacement,
+    //     local_cluster_sum.data(),
+    //     local_cluster_size.data()
+    // );
+
     for (int i = row_displacement; i < num_rows + row_displacement; i++) {
         for (int j = 0; j < num_cols; j++) {
             auto item = matrix[i * num_cols + j];
