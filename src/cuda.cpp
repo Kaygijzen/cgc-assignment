@@ -111,20 +111,29 @@ std::pair<int, double> update_row_labels(
     const label_type* col_labels,
     const float* cluster_avg,
     int displacement) {
-        //TODO: CUDA
     int num_updated = 0;
     double total_dist = 0;
 
-    call_update_row_labels(
-        num_rows,
-        num_cols,
-        num_row_labels,
-        num_col_labels,
-        matrix,
-        row_labels,
-        col_labels,
-        cluster_avg,
-        displacement);
+    for (int i = 0; i < num_rows; i++) {
+
+        auto [best_label, best_dist] = best_label_row(
+            num_row_labels,
+            num_col_labels,
+            num_rows,
+            num_cols,
+            matrix,
+            cluster_avg,
+            i,
+            col_labels
+        );
+
+        if (row_labels[i] != best_label) {
+            row_labels[i] = best_label;
+            num_updated++;
+        }
+
+        total_dist += best_dist;
+    }
 
     return {num_updated, total_dist};
 }

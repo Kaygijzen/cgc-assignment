@@ -175,10 +175,6 @@ std::pair<int, double> cluster_serial_iteration(
         row_labels,
         col_labels);
 
-    for (int i = 0; i < cluster_avg.size(); i++) {
-        std::cout << "cluster_avg = " << cluster_avg.at(i) << "\n";
-    }
-
     // Update labels along the rows
     auto [num_rows_updated, _] = update_row_labels(
         num_rows,
@@ -275,8 +271,6 @@ int main(int argc, const char* argv[]) {
             &max_iter)) {
         return EXIT_FAILURE;
     }
-
-    std::cout << "num_clusters = " << num_row_labels << " * " << num_col_labels << " = " << num_col_labels * num_row_labels << "\n";
 
     // Cluster labels
     cluster_serial(

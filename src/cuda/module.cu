@@ -7,80 +7,126 @@
 #include <cuda.h>
 #include "module.h"
 #include <stdio.h>
+#include <math.h>
 
-#define N 1048576
-
-// Kernel
-__global__ void add_vectors(double *a, double *b, double *c)
+__global__ void block_dist_row_labels(
+	const float* matrix, 
+	int i,
+	int k,
+	const int* col_labels,
+	const float* cluster_avg,
+	double* dist_array,
+	int num_cols,
+	int num_col_labels) 
 {
-	int id = blockDim.x * blockIdx.x + threadIdx.x;
-	if(id < N) c[id] = a[id] + b[id];
-}
+	__shared__ double sdata[1024];
 
-void call_kernel(int a){
-  // Number of bytes to allocate for N doubles
-	size_t bytes = N*sizeof(double);
+	int j = blockDim.x * blockIdx.x + threadIdx.x; 
+	int tid = threadIdx.x;
 
-	// Allocate memory for arrays A, B, and C on host
-	double *A = (double*)malloc(bytes);
-	double *B = (double*)malloc(bytes);
-	double *C = (double*)malloc(bytes);
+	if (j < num_cols) {
+		float item = matrix[i * num_cols + j];
 
-	// Allocate memory for arrays d_A, d_B, and d_C on device
-	double *d_A, *d_B, *d_C;
-	cudaMalloc(&d_A, bytes);
-	cudaMalloc(&d_B, bytes);
-	cudaMalloc(&d_C, bytes);
+		int row_label = k;
+		int col_label = col_labels[j];
 
-	// Fill host arrays A and B
-	for(int i=0; i<N; i++)
-	{
-		A[i] = 1.0;
-		B[i] = 2.0;
+		float y = cluster_avg[row_label * num_col_labels + col_label];
+
+		sdata[tid] = (y - item) * (y - item);
 	}
 
-	// Copy data from host arrays A and B to device arrays d_A and d_B
-	cudaMemcpy(d_A, A, bytes, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_B, B, bytes, cudaMemcpyHostToDevice);
+	__syncthreads();
 
-	// Set execution configuration parameters
-	//		thr_per_blk: number of CUDA threads per grid block
-	//		blk_in_grid: number of blocks in grid
-	int thr_per_blk = 256;
-	int blk_in_grid = ceil( float(N) / thr_per_blk );
-
-	// Launch kernel
-	add_vectors<<< blk_in_grid, thr_per_blk >>>(d_A, d_B, d_C);
-
-	// Copy data from device array d_C to host array C
-	cudaMemcpy(C, d_C, bytes, cudaMemcpyDeviceToHost);
-
-	// Verify results
-    double tolerance = 1.0e-14;
-	for(int i=0; i<N; i++)
-	{
-		if( fabs(C[i] - 3.0) > tolerance)
-		{ 
-			printf("\nError: value of C[%d] = %d instead of 3.0\n\n", i, C[i]);
-			exit(1);
+	// do reduction in shared mem
+	for (unsigned int s=1; s < blockDim.x; s *= 2) {
+		if (tid % (2*s) == 0) {
+			sdata[tid] += sdata[tid + s];
 		}
-	}	
+		__syncthreads();
+	}
 
-	// Free CPU memory
-	free(A);
-	free(B);
-	free(C);
+	// write result for this block to global mem
+	if (tid == 0) {
+		dist_array[blockIdx.x] = sdata[0];
+	}
+}
 
-	// Free GPU memory
-	cudaFree(d_A);
-	cudaFree(d_B);
-	cudaFree(d_C);
+std::pair<int, double> best_label_row(
+	int num_row_labels,
+	int num_col_labels,
+	int num_rows,
+	int num_cols,
+	const float* matrix,
+	const float* cluster_avg,
+	int i,
+	const int* col_labels) {
+	int N = num_cols;
 
-	printf("\n---------------------------\n");
-	printf("__SUCCESS__\n");
-	printf("---------------------------\n");
-	printf("N                 = %d\n", N);
-	printf("Threads Per Block = %d\n", thr_per_blk);
-	printf("Blocks In Grid    = %d\n", blk_in_grid);
-	printf("---------------------------\n\n");
+	// Block size and number calculation
+	int blockSize = 1024;
+  int numBlocks = (N + blockSize - 1) / blockSize;
+	
+	// Number of bytes to allocate for numBlocks
+	size_t bytes = numBlocks*sizeof(double);
+
+	// Allocate memory on host
+	double *dist_blocks = (double*)malloc(bytes);
+
+	// Allocate memory on device
+	double *d_dist_blocks;
+	cudaMalloc(&d_dist_blocks, bytes);
+	float *d_matrix;
+	cudaMalloc(&d_matrix, (num_cols*num_rows)*sizeof(float));
+	float *d_cluster_avg;
+	cudaMalloc(&d_cluster_avg, (num_row_labels*num_col_labels)*sizeof(float));
+	int *d_col_labels;
+	cudaMalloc(&d_col_labels, num_cols*sizeof(int));
+
+	// Copy data to device
+	cudaMemcpy(d_matrix, matrix, (num_cols*num_rows)*sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_cluster_avg, cluster_avg, (num_row_labels*num_col_labels)*sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_col_labels, col_labels, num_cols*sizeof(int), cudaMemcpyHostToDevice);
+
+	int best_label = -1;
+	double best_dist = INFINITY;
+
+	for (int k = 0; k < num_row_labels; k++) {
+		double dist = 0;
+
+		block_dist_row_labels<<< numBlocks, blockSize >>>(
+			d_matrix,
+			i,
+			k,
+			d_col_labels,
+			d_cluster_avg,
+			d_dist_blocks, 
+			num_cols,
+			num_col_labels);
+
+		cudaDeviceSynchronize();
+
+		// Copy result from device to host
+		cudaMemcpy(dist_blocks, d_dist_blocks, bytes, cudaMemcpyDeviceToHost);
+
+		// Reduce result by summing all block results
+		double sum = 0;
+		for (int x = 0; x < numBlocks; x++) {
+			sum += dist_blocks[x];
+		}
+
+		dist = sum;
+
+		if (dist < best_dist) {
+			best_dist = dist;
+			best_label = k;
+		}
+	}
+
+	// Free allocated memory
+	cudaFree(d_dist_blocks);
+	cudaFree(d_matrix);
+	cudaFree(d_col_labels);
+	free(dist_blocks);
+
+	return {best_label, best_dist};
 }

@@ -7,10 +7,18 @@
 #define CUDA_GLOBAL
 #endif
 
+#include <iostream>
 #include <numeric>
 #include <cuda.h>
 
-// CUDA_GLOBAL void add_vectors(double *a, double *b, double *c);
-void call_kernel(int a);
+std::pair<int, double> best_label_row(
+	int num_row_labels,
+	int num_col_labels,
+	int num_rows,
+	int num_cols,
+	const float* matrix,
+	const float* cluster_avg,
+	int i,
+	const int* col_labels); 
 
 #endif
