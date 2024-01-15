@@ -91,64 +91,6 @@ std::vector<float> calculate_cluster_average(
     return cluster_avg;
 }
 
-float calculate_distance(float avg, float item) {
-    float diff = (avg - item);
-    return diff * diff;
-}
-
-/**
- * Update the labels along the rows of the matrix. This function returns
- * both the number of rows that changed their label and the total distance.
- * If the first return value is zero, then no row was updated.
- */
-std::pair<int, double> update_row_labels(
-    int num_rows,
-    int num_cols,
-    int num_row_labels,
-    int num_col_labels,
-    const float* matrix,
-    label_type* row_labels,
-    const label_type* col_labels,
-    const float* cluster_avg,
-    int displacement) {
-    int num_updated = 0;
-    double total_dist = 0;
-
-    for (int i = 0; i < num_rows; i++) {
-        int best_label = -1;
-        double best_dist = INFINITY;
-        int displaced_i = i + displacement;
-
-        for (int k = 0; k < num_row_labels; k++) {
-            double dist = 0;
-
-            for (int j = 0; j < num_cols; j++) {
-                float item = matrix[displaced_i * num_cols + j];
-
-                int row_label = k;
-                int col_label = col_labels[j];
-                float y = cluster_avg[row_label * num_col_labels + col_label];
-
-                dist += calculate_distance(y, item);
-            }
-
-            if (dist < best_dist) {
-                best_dist = dist;
-                best_label = k;
-            }
-        }
-
-        if (row_labels[i] != best_label) {
-            row_labels[i] = best_label;
-            num_updated++;
-        }
-
-        total_dist += best_dist;
-    }
-
-    return {num_updated, total_dist};
-}
-
 /**
  * Perform one iteration of the co-clustering algorithm. This function updates
  * the labels in both `row_labels` and `col_labels`, and returns the total
@@ -197,8 +139,8 @@ std::pair<int, double> cluster_serial_iteration(
                 MPI_COMM_WORLD);
 
     // Update labels along the rows
-    auto [num_rows_updated, _] = update_row_labels(
-        num_rows_recv,
+    auto [num_rows_updated, _] = call_update_row_labels_kernel(
+        num_rows,
         num_cols,
         num_row_labels,
         num_col_labels,
@@ -206,7 +148,8 @@ std::pair<int, double> cluster_serial_iteration(
         scatter_row_labels.data(),
         col_labels,
         cluster_avg.data(),
-        row_displacement);
+        row_displacement,
+        num_rows_recv);
 
     // Synchronize row_labels and num_rows_updated
     MPI_Allgatherv(scatter_row_labels.data(),
