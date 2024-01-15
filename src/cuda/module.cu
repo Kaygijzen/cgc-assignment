@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <math.h>
 
-__device__ float calculate_dist(float avg, float item) {
+__device__ float calculate_distance(float avg, float item) {
 	float diff = (avg - item);
 	return diff * diff;
 }
@@ -174,7 +174,7 @@ __global__ void calculate_block_distance_row(
 	int num_cols,
 	int num_col_labels) 
 {
-	__shared__ double sdata[1024];
+	__shared__ double s_total_dist[1024];
 
 	int j = blockDim.x * blockIdx.x + threadIdx.x; 
 	int tid = threadIdx.x;
@@ -186,7 +186,7 @@ __global__ void calculate_block_distance_row(
 
 		float y = cluster_avg[row_label * num_col_labels + col_label];
 
-		sdata[tid] = (y - item) * (y - item);
+		s_total_dist[tid] = calculate_distance(y, item);
 	}
 
 	__syncthreads();
@@ -194,14 +194,14 @@ __global__ void calculate_block_distance_row(
 	// do reduction in shared mem
 	for (int s=1; s < blockDim.x; s *= 2) {
 		if (tid % (2*s) == 0) {
-			sdata[tid] += sdata[tid + s];
+			s_total_dist[tid] += s_total_dist[tid + s];
 		}
 		__syncthreads();
 	}
 
 	// write result for this block to global mem
 	if (tid == 0) {
-		dist_per_block[blockIdx.x] = sdata[0];
+		dist_per_block[blockIdx.x] = s_total_dist[0];
 	}
 }
 
@@ -302,6 +302,8 @@ __global__ void col_labels_iteration(
 	int* col_labels,
 	const int* row_labels,
 	const float* cluster_avg,
+	int* num_updated_per_block,
+	double* total_dist_per_block,
 	int num_cols,
 	int num_rows,
 	int num_col_labels,
@@ -313,11 +315,9 @@ __global__ void col_labels_iteration(
 
 	__shared__ int s_num_updated[1024];
 	__shared__ double s_total_dist[1024];
+	s_num_updated[tid] = 0;
+	s_total_dist[tid] = 0.0;
 
-	for (int i = threadIdx.x; i < 1024; i += blockDim.x) {
-		s_num_updated[i] = 0;
-		s_total_dist[i] = 0.0;
-	}
 	__syncthreads();
 
     if (j < num_cols_recv) {
@@ -334,7 +334,7 @@ __global__ void col_labels_iteration(
                 auto col_label = k;
                 auto y = cluster_avg[row_label * num_col_labels + col_label];
 
-                dist += calculate_dist(y, item);
+                dist += calculate_distance(y, item);
             }
 
             if (dist < best_dist) {
@@ -351,7 +351,22 @@ __global__ void col_labels_iteration(
         s_total_dist[tid] += best_dist;
     }
 
-	// TODO: reduce num_updated and total_dist
+	__syncthreads();
+
+	// do reduction in shared mem
+	for (int s=1; s < blockDim.x; s *= 2) {
+		if (tid % (2*s) == 0) {
+			s_num_updated[tid] += s_num_updated[tid + s];
+			s_total_dist[tid] += s_total_dist[tid + s];
+		}
+		__syncthreads();
+	}
+
+	// write result for this block to global mem
+	if (tid == 0) {
+		num_updated_per_block[blockIdx.x] = s_num_updated[0];
+		total_dist_per_block[blockIdx.x] = s_total_dist[0];
+	}
 }
 
 std::pair<int, double> call_update_col_labels_kernel(
@@ -372,6 +387,10 @@ std::pair<int, double> call_update_col_labels_kernel(
 	int blockSize = 1024;
     int numBlocks = (N + blockSize - 1) / blockSize;
 
+	// Allocate memory on host
+	int *num_updated_per_block = (int*)malloc(numBlocks*sizeof(int));
+	double *total_dist_per_block = (double*)malloc(numBlocks*sizeof(double));
+
 	// Allocate memory for data on device
 	float *d_matrix;
 	cudaMalloc(&d_matrix, (num_cols*num_rows)*sizeof(float));
@@ -381,6 +400,10 @@ std::pair<int, double> call_update_col_labels_kernel(
 	cudaMalloc(&d_col_labels, num_cols_recv*sizeof(int));
 	int *d_row_labels;
 	cudaMalloc(&d_row_labels, num_rows*sizeof(int));
+	int *d_num_updated_per_block;
+	cudaMalloc(&d_num_updated_per_block, numBlocks*sizeof(int));
+	double *d_total_dist_per_block;
+	cudaMalloc(&d_total_dist_per_block, numBlocks*sizeof(double));
 
 	// Copy data to device
 	cudaMemcpy(d_matrix, matrix, (num_cols*num_rows)*sizeof(float), cudaMemcpyHostToDevice);
@@ -394,6 +417,8 @@ std::pair<int, double> call_update_col_labels_kernel(
 		d_col_labels,
 		d_row_labels,
 		d_cluster_avg,
+		d_num_updated_per_block,
+		d_total_dist_per_block,
 		num_cols,
 		num_rows,
 		num_col_labels,
@@ -403,11 +428,23 @@ std::pair<int, double> call_update_col_labels_kernel(
 	// Copy results from device to host
 	cudaMemcpy(col_labels, d_col_labels, num_cols_recv*sizeof(int), cudaMemcpyDeviceToHost);
 
+	cudaMemcpy(num_updated_per_block, d_num_updated_per_block, numBlocks*sizeof(int), cudaMemcpyDeviceToHost);
+	cudaMemcpy(total_dist_per_block, d_total_dist_per_block, numBlocks*sizeof(double), cudaMemcpyDeviceToHost);
+
+	int num_updated = 0;
+	double total_dist = 0;
+
+	// Reduce result by summing all block results
+	for (int i = 0; i < numBlocks; i++) {
+		num_updated += num_updated_per_block[i];
+		total_dist += total_dist_per_block[i];
+	}
+
 	// Free allocated memory
 	cudaFree(d_matrix);
 	cudaFree(d_cluster_avg);
 	cudaFree(d_col_labels);
 	cudaFree(d_row_labels);
 
-	return {1, 1};
+	return {num_updated, total_dist};
 }
