@@ -31,7 +31,8 @@ std::pair<int, double> call_update_row_labels_kernel(
     int* row_labels,
     const int* col_labels,
     const float* cluster_avg,
-    int displacement);
+    int displacement,
+	int num_rows_recv);
 
 std::pair<int, double> call_update_col_labels_kernel(
 	int num_rows,

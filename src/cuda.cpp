@@ -140,7 +140,7 @@ std::pair<int, double> cluster_serial_iteration(
 
     // Update labels along the rows
     auto [num_rows_updated, _] = call_update_row_labels_kernel(
-        num_rows_recv,
+        num_rows,
         num_cols,
         num_row_labels,
         num_col_labels,
@@ -148,7 +148,8 @@ std::pair<int, double> cluster_serial_iteration(
         scatter_row_labels.data(),
         col_labels,
         cluster_avg.data(),
-        row_displacement);
+        row_displacement,
+        num_rows_recv);
 
     // Synchronize row_labels and num_rows_updated
     MPI_Allgatherv(scatter_row_labels.data(),
