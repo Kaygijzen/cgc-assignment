@@ -13,10 +13,6 @@ __device__ float calculate_dist(float avg, float item) {
 	float diff = (avg - item);
 	return diff * diff;
 }
-float calculate_distance(float avg, float item) {
-	float diff = (avg - item);
-	return diff * diff;
-}
 
 // THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
 __global__ void cluster_id_kernel(
