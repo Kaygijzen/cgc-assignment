@@ -46,33 +46,6 @@ std::vector<float> calculate_cluster_average(
         std::vector<double>(num_clusters, 0.0);
     auto local_cluster_size = std::vector<int>(num_clusters, 0);
 
-    // THE FOLLOWING IS TENTANTIVE AND NOT IMPLEMENTED
-	// // Allocate memory on host
-	// int *cluster_ids = (int*)malloc((num_cols*num_rows)*sizeof(int));
-
-    // call_cluster_id_kernel(
-    //     num_rows,
-    //     num_cols,
-    //     num_row_labels,
-    //     num_col_labels,
-    //     matrix,
-    //     row_labels,
-    //     col_labels,
-    //     row_displacement,
-    //     cluster_ids);
-
-    // call_cluster_sum_size_kernel(
-    //     num_rows,
-    //     num_cols,
-	//     num_row_labels,
-	//     num_col_labels,
-    //     matrix,
-    //     cluster_ids,
-    //     row_displacement,
-    //     local_cluster_sum.data(),
-    //     local_cluster_size.data()
-    // );
-
     for (int i = row_displacement; i < num_rows + row_displacement; i++) {
         for (int j = 0; j < num_cols; j++) {
             auto item = matrix[i * num_cols + j];
@@ -142,17 +115,28 @@ std::pair<int, double> update_row_labels(
     double total_dist = 0;
 
     for (int i = 0; i < num_rows; i++) {
+        int best_label = -1;
+        double best_dist = INFINITY;
+        int displaced_i = i + displacement;
 
-        auto [best_label, best_dist] = best_row_label(
-            num_row_labels,
-            num_col_labels,
-            num_rows,
-            num_cols,
-            matrix,
-            cluster_avg,
-            i,
-            col_labels
-        );
+        for (int k = 0; k < num_row_labels; k++) {
+            double dist = 0;
+
+            for (int j = 0; j < num_cols; j++) {
+                float item = matrix[displaced_i * num_cols + j];
+
+                int row_label = k;
+                int col_label = col_labels[j];
+                float y = cluster_avg[row_label * num_col_labels + col_label];
+
+                dist += calculate_distance(y, item);
+            }
+
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_label = k;
+            }
+        }
 
         if (row_labels[i] != best_label) {
             row_labels[i] = best_label;
@@ -161,39 +145,6 @@ std::pair<int, double> update_row_labels(
 
         total_dist += best_dist;
     }
-
-    return {num_updated, total_dist};
-}
-
-/**
- * Update the labels along the columns of the matrix. This function returns
- * the number of columns that changed their label label and the total distance.
- * If the first return value is zero, then no column was updated.
- */
-std::pair<int, double> update_col_labels(
-    int num_rows,
-    int num_cols,
-    int num_row_labels,
-    int num_col_labels,
-    const float* matrix,
-    const label_type* row_labels,
-    label_type* col_labels,
-    const float* cluster_avg,
-    int displacement,
-    int num_cols_recv) {
-
-    auto [num_updated, total_dist] = call_update_col_labels_kernel(
-        num_rows,
-        num_cols,
-        num_row_labels,
-        num_col_labels,
-        matrix,
-        row_labels,
-        col_labels,
-        cluster_avg,
-        displacement,
-        num_cols_recv
-    );
 
     return {num_updated, total_dist};
 }
@@ -285,8 +236,8 @@ std::pair<int, double> cluster_serial_iteration(
 
     int col_displacement = col_displacements[rank];
 
-    // Update the labels along the columns
-    auto [num_cols_updated, total_dist] = update_col_labels(
+    // Update the labels along the columns using the CUDA kernel TODO: num_cols_updated and total_dist
+    auto [num_cols_updated, total_dist] = call_update_col_labels_kernel(
         num_rows,
         num_cols,
         num_row_labels,

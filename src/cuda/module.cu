@@ -9,8 +9,14 @@
 #include <stdio.h>
 #include <math.h>
 
-__device__ int d_num_col_labels_updated = 0;
-__device__ double d_total_dist_cols = 0;
+__device__ float calculate_dist(float avg, float item) {
+	float diff = (avg - item);
+	return diff * diff;
+}
+float calculate(float avg, float item) {
+	float diff = (avg - item);
+	return diff * diff;
+}
 
 // THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
 __global__ void cluster_id_kernel(
@@ -291,40 +297,53 @@ __global__ void col_labels_iteration(
 	int num_cols,
 	int num_rows,
 	int num_col_labels,
+	int num_cols_recv,
 	int displacement) {
-	int j = blockDim.x * blockIdx.x + threadIdx.x; 
-	int displaced_j = j + displacement;
 
-	if (j < num_cols) {
-		int best_label = -1;
-		double best_dist = INFINITY;
+	int j = blockIdx.x * blockDim.x + threadIdx.x;
+	int tid = threadIdx.x;
 
-		for (int k = 0; k < num_col_labels; k++) {
-			double dist = 0;
+	__shared__ int s_num_updated[1024];
+	__shared__ double s_total_dist[1024];
 
-			for (int i = 0; i < num_rows; i++) {
-				auto item = matrix[i * num_cols + displaced_j];
-
-				auto row_label = row_labels[i];
-				auto col_label = k;
-				auto y = cluster_avg[row_label * num_col_labels + col_label];
-
-				dist += (y - item) * (y - item);
-			}
-
-			if (dist < best_dist) {
-				best_dist = dist;
-				best_label = k;
-			}
-		}
-
-		if (col_labels[displaced_j] != best_label) {
-			col_labels[displaced_j] = best_label;
-			d_num_col_labels_updated++;
-		}
-
-		d_total_dist_cols += best_dist;
+	for (int i = threadIdx.x; i < 1024; i += blockDim.x) {
+		s_num_updated[i] = 0;
+		s_total_dist[i] = 0.0;
 	}
+	__syncthreads();
+
+    if (j < num_cols_recv) {
+        int best_label = -1;
+        double best_dist = INFINITY;
+
+        for (int k = 0; k < num_col_labels; k++) {
+            double dist = 0;
+
+            for (int i = 0; i < num_rows; i++) {
+                auto item = matrix[i * num_cols + j + displacement];
+
+                auto row_label = row_labels[i];
+                auto col_label = k;
+                auto y = cluster_avg[row_label * num_col_labels + col_label];
+
+                dist += calculate_dist(y, item);
+            }
+
+            if (dist < best_dist) {
+                best_dist = dist;
+                best_label = k;
+            }
+        }
+
+        if (col_labels[j] != best_label) {
+            col_labels[j] = best_label;
+            s_num_updated[tid]++;
+        }
+
+        s_total_dist[tid] += best_dist;
+    }
+
+	// TODO: reduce num_updated and total_dist
 }
 
 std::pair<int, double> call_update_col_labels_kernel(
@@ -343,7 +362,7 @@ std::pair<int, double> call_update_col_labels_kernel(
 
 	// Block size and number calculation
 	int blockSize = 1024;
-  int numBlocks = (N + blockSize - 1) / blockSize;
+    int numBlocks = (N + blockSize - 1) / blockSize;
 
 	// Allocate memory for data on device
 	float *d_matrix;
@@ -351,14 +370,14 @@ std::pair<int, double> call_update_col_labels_kernel(
 	float *d_cluster_avg;
 	cudaMalloc(&d_cluster_avg, (num_row_labels*num_col_labels)*sizeof(float));
 	int *d_col_labels;
-	cudaMalloc(&d_col_labels, num_cols*sizeof(int));
+	cudaMalloc(&d_col_labels, num_cols_recv*sizeof(int));
 	int *d_row_labels;
 	cudaMalloc(&d_row_labels, num_rows*sizeof(int));
 
 	// Copy data to device
 	cudaMemcpy(d_matrix, matrix, (num_cols*num_rows)*sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_cluster_avg, cluster_avg, (num_row_labels*num_col_labels)*sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_col_labels, col_labels, num_cols*sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_col_labels, col_labels, num_cols_recv*sizeof(int), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_row_labels, row_labels, num_rows*sizeof(int), cudaMemcpyHostToDevice);
 
 	// Call kernel
@@ -367,17 +386,14 @@ std::pair<int, double> call_update_col_labels_kernel(
 		d_col_labels,
 		d_row_labels,
 		d_cluster_avg,
-		num_cols_recv,
+		num_cols,
 		num_rows,
 		num_col_labels,
+		num_cols_recv,
 		displacement);
 
 	// Copy results from device to host
-	int num_updated;
-	double total_dist;
-	cudaMemcpy(col_labels, d_col_labels, num_cols*sizeof(int), cudaMemcpyDeviceToHost);
-	cudaMemcpyFromSymbol(&num_updated, d_num_col_labels_updated, sizeof(int));
-	cudaMemcpyFromSymbol(&total_dist, d_total_dist_cols, sizeof(double));
+	cudaMemcpy(col_labels, d_col_labels, num_cols_recv*sizeof(int), cudaMemcpyDeviceToHost);
 
 	// Free allocated memory
 	cudaFree(d_matrix);
@@ -385,5 +401,5 @@ std::pair<int, double> call_update_col_labels_kernel(
 	cudaFree(d_col_labels);
 	cudaFree(d_row_labels);
 
-	return {num_updated, total_dist};
+	return {1, 1};
 }
