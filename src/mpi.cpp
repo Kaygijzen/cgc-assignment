@@ -427,10 +427,6 @@ int main(int argc, const char* argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     
     if (rank == 0) {
-        // for (int i = 0; i < row_labels.size(); i++) {
-        //     std::cout << "row_label[i] " << i << " = " << row_labels.at(i) << "\n";
-        // }
-
         // Write resulting labels
         write_labels(
         output_file,
