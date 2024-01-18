@@ -39,15 +39,14 @@ std::vector<float> calculate_cluster_average(
     const float* matrix,
     const label_type* row_labels,
     const label_type* col_labels,
-    int row_displacement,
-    int num_rows_recv) {
+    int row_displacement) {
 
     int num_clusters = num_row_labels * num_col_labels;
     auto local_cluster_sum =
         std::vector<double>(num_clusters, 0.0);
     auto local_cluster_size = std::vector<int>(num_clusters, 0);
 
-    for (int i = row_displacement; i < num_rows_recv + row_displacement; i++) {
+    for (int i = row_displacement; i < num_rows + row_displacement; i++) {
         for (int j = 0; j < num_cols; j++) {
             auto item = matrix[i * num_cols + j];
             auto row_label = row_labels[i];
@@ -81,13 +80,12 @@ std::vector<float> calculate_cluster_average(
 
     auto cluster_avg = std::vector<float>(num_clusters);
 
-    for (int i = 0; i < num_row_labels; i++) {
-        for (int j = 0; j < num_col_labels; j++) {
-            auto index = i * num_col_labels + j;
-            cluster_avg[index] =
-                float(cluster_sum[index]) / float(cluster_size[index]);
-        }
-    }
+    call_cluster_average_kernel(
+        num_row_labels,
+        num_col_labels,
+        cluster_sum.data(),
+        cluster_size.data(),
+        cluster_avg.data());
 
     return cluster_avg;
 }
@@ -118,15 +116,14 @@ std::pair<int, double> cluster_serial_iteration(
     //// SECTION: calculate_cluster_average
     // Calculate the average value per cluster
     auto cluster_avg = calculate_cluster_average(
-        num_rows,
+        num_rows_recv,
         num_cols,
         num_row_labels,
         num_col_labels,
         matrix,
         row_labels,
         col_labels,
-        row_displacement,
-        num_rows_recv);
+        row_displacement);
 
     //// SECTION: update_row_labels
     auto scatter_row_labels = std::vector<label_type>(num_rows_recv, 0);

@@ -15,74 +15,6 @@ __device__ float calculate_distance(float avg, float item) {
 }
 
 // THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
-__global__ void cluster_id_kernel(
-	int num_rows,
-	int num_cols,
-	const int* row_labels,
-	const int* col_labels,
-	int row_displacement,
-	int* cluster_ids
-) {
-	int j = blockDim.x * blockIdx.x + threadIdx.x; 
-	int tid = threadIdx.x;
-
-	if (j < num_cols) {
-		for (int i = row_displacement; i < num_rows + row_displacement; i++) {
-			cluster_ids[i * num_cols + j] = row_labels[i] * col_labels[j];
-		}
-	}
-}
-
-// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
-void call_cluster_id_kernel(
-	int num_rows,
-	int num_cols,
-	int num_row_labels,
-	int num_col_labels,
-	const float* matrix,
-	const int* row_labels,
-	const int* col_labels,
-	int row_displacement,
-	int* cluster_ids) {
-
-	int N = num_cols;
-
-	// Block size and number calculation
-	int blockSize = 1024;
-  int numBlocks = (N + blockSize - 1) / blockSize;
-
-	// Allocate memory for data on device
-	float *d_matrix;
-	cudaMalloc(&d_matrix, (num_cols*num_rows)*sizeof(float));
-	int *d_cluster_ids;
-	cudaMalloc(&d_cluster_ids, (num_cols*num_rows)*sizeof(int));
-	int *d_col_labels;
-	cudaMalloc(&d_col_labels, num_cols*sizeof(int));
-	int *d_row_labels;
-	cudaMalloc(&d_row_labels, num_rows*sizeof(int));
-
-	// Copy data to device
-	cudaMemcpy(d_row_labels, row_labels, (num_rows)*sizeof(int), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_col_labels, col_labels, (num_cols)*sizeof(int), cudaMemcpyHostToDevice);
-
-	cluster_id_kernel <<< numBlocks, blockSize >>>(
-		num_rows,
-		num_cols,
-		d_row_labels,
-		d_col_labels,
-		row_displacement,
-		d_cluster_ids);
-
-	// Copy result from device to host
-	cudaMemcpy(cluster_ids, d_cluster_ids, (num_cols*num_rows)*sizeof(int), cudaMemcpyDeviceToHost);
-	
-	// Free allocated memory
-	cudaFree(d_cluster_ids);
-	cudaFree(d_col_labels);
-	cudaFree(d_row_labels);
-}
-
-// THIS FUNCTION IS TENTATIVE AND NOT IMPLEMENTED
 __global__ void cluster_sum_size_kernel(
 	int num_rows,
 	int num_cols,
@@ -162,6 +94,63 @@ void call_cluster_sum_size_kernel(
 	cudaFree(d_cluster_ids);
 	cudaFree(d_cluster_sum);
 	cudaFree(d_cluster_size);
+}
+
+__global__ void calculate_cluster_avg(
+	int num_row_labels,
+	int num_col_labels,
+	double* cluster_sum,
+	int* cluster_size,
+	float* cluster_avg) {
+
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+	if (i < num_row_labels && j < num_col_labels) {
+		cluster_avg[i * num_col_labels + j] = float(cluster_sum[i * num_col_labels + j]) / float(cluster_size[i * num_col_labels + j]);   
+    }
+}
+
+void call_cluster_average_kernel(
+	int num_row_labels,
+	int num_col_labels,
+	double* cluster_sum,
+	int* cluster_size,
+	float* cluster_avg) {
+
+	int N = num_col_labels;
+	int num_clusters = num_row_labels * num_col_labels;
+
+	// Block size and number calculation
+	dim3 blockSize(32, 32);
+    dim3 numBlocks((N + blockSize.x - 1) / blockSize.x, (N+blockSize.y -1) / blockSize.y);
+
+	// Allocate memory on device
+	double *d_cluster_sum;
+	cudaMalloc(&d_cluster_sum, num_clusters*sizeof(double));
+	int *d_cluster_size;
+	cudaMalloc(&d_cluster_size, num_clusters*sizeof(int));
+	float *d_cluster_avg;
+	cudaMalloc(&d_cluster_avg, num_clusters*sizeof(float));
+
+	// Copy data to device
+	cudaMemcpy(d_cluster_sum, cluster_sum, num_clusters*sizeof(double), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_cluster_size, cluster_size, num_clusters*sizeof(int), cudaMemcpyHostToDevice);
+
+	calculate_cluster_avg <<< numBlocks, blockSize >>>(
+		num_row_labels,
+		num_col_labels,
+		d_cluster_sum,
+		d_cluster_size,
+		d_cluster_avg); 
+
+	// Copy result from device to host
+	cudaMemcpy(cluster_avg, d_cluster_avg, num_clusters*sizeof(float), cudaMemcpyDeviceToHost);
+
+	// Free allocated memory
+	cudaFree(d_cluster_sum);
+	cudaFree(d_cluster_size);
+	cudaFree(d_cluster_avg);
 }
 
 __global__ void calculate_block_distance_row(
