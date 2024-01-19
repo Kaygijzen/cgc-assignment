@@ -17,6 +17,9 @@ cgc_serial: $(SRC)/serial.cpp $(SRC)/common.h
 cgc_mpi: $(SRC)/mpi.cpp $(SRC)/common.h
 	$(MPICC) -o $@ $(SRC)/mpi.cpp $(CFLAGS) $(INCLUDES)
 
+cgc_openmp: $(SRC)/mpi_openmp.cpp $(SRC)/common.h
+	$(MPICC) -fopenmp -o $@ $(SRC)/mpi_openmp.cpp $(CFLAGS) $(INCLUDES)
+
 
 cgc_cuda: cgc_kernel.o
 	$(MPICC) cgc_kernel.o $(SRC)/cuda.cpp -o $@ $(CFLAGS) $(INCLUDES) -lcudart -lcurand
