@@ -1,5 +1,15 @@
 #include <iostream>
 
+void call_cluster_id_kernel(
+	int num_rows,
+	int num_cols,
+	int num_col_labels,
+	const int* row_labels,
+	const int* col_labels,
+	int* cluster_ids,
+	int row_displacement,
+	int num_rows_recv);
+
 void call_cluster_average_kernel(
 	int num_row_labels,
 	int num_col_labels,

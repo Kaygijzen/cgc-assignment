@@ -37,23 +37,35 @@ std::vector<float> calculate_cluster_average(
     int num_row_labels,
     int num_col_labels,
     const float* matrix,
-    const label_type* row_labels,
-    const label_type* col_labels,
-    int row_displacement) {
+    const int* row_labels,
+    const int* col_labels,
+    int row_displacement,
+    int num_rows_recv) {
 
     int num_clusters = num_row_labels * num_col_labels;
     auto local_cluster_sum =
         std::vector<double>(num_clusters, 0.0);
     auto local_cluster_size = std::vector<int>(num_clusters, 0);
 
-    for (int i = row_displacement; i < num_rows + row_displacement; i++) {
-        for (int j = 0; j < num_cols; j++) {
-            auto item = matrix[i * num_cols + j];
-            auto row_label = row_labels[i];
-            auto col_label = col_labels[j];
+    auto cluster_ids = std::vector<int>(num_rows_recv*num_cols);
 
-            local_cluster_sum[row_label * num_col_labels + col_label] += item;
-            local_cluster_size[row_label * num_col_labels + col_label] += 1;
+    call_cluster_id_kernel(
+        num_rows,
+        num_cols,
+        num_col_labels,
+        row_labels,
+        col_labels,
+        cluster_ids.data(),
+        row_displacement,
+        num_rows_recv);
+
+    for (int i = 0; i < num_rows_recv; i++) {
+        for (int j = 0; j < num_cols; j++) {
+            auto item = matrix[(i + row_displacement) * num_cols + j];
+            int c = cluster_ids[i * num_cols + j];
+            
+            local_cluster_sum[c] += item;
+            local_cluster_size[c] += 1;
         }
     }
 
@@ -116,14 +128,15 @@ std::pair<int, double> cluster_serial_iteration(
     //// SECTION: calculate_cluster_average
     // Calculate the average value per cluster
     auto cluster_avg = calculate_cluster_average(
-        num_rows_recv,
+        num_rows,
         num_cols,
         num_row_labels,
         num_col_labels,
         matrix,
         row_labels,
         col_labels,
-        row_displacement);
+        row_displacement,
+        num_rows_recv);
 
     //// SECTION: update_row_labels
     auto scatter_row_labels = std::vector<label_type>(num_rows_recv, 0);
